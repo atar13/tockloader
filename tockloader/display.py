@@ -88,9 +88,12 @@ class HumanReadableDisplay(Display):
 
         if not quiet:
             # Print info about each app
-            for i, app in enumerate(apps):
+            curr_app_num = 0
+            curr_shlib_num = 0
+            for app in apps:
                 if app.is_app():
-                    self.out += helpers.text_in_box("App {}".format(i), 52) + "\n"
+                    self.out += helpers.text_in_box("App {}".format(curr_app_num), 52) + "\n"
+                    curr_app_num += 1
 
                     # # Check if this app is OK with the MPU region requirements.
                     # # TODO: put this back!
@@ -99,6 +102,10 @@ class HumanReadableDisplay(Display):
                     # ):
                     #     self.out += "  [WARNING] App is misaligned for the MPU\n"
 
+                    self.out += textwrap.indent(app.info(verbose), "  ") + "\n\n"
+                elif app.is_shared_library():
+                    self.out += helpers.text_in_box("Shared Library {}".format(curr_shlib_num), 52) + "\n"
+                    curr_shlib_num += 1
                     self.out += textwrap.indent(app.info(verbose), "  ") + "\n\n"
                 else:
                     # Display padding
@@ -317,7 +324,10 @@ class JSONDisplay(Display):
         self.object["apps"] = []
 
         for app in apps:
-            self.object["apps"].append(app.object())
+            if app.is_shared_library():
+                self.object["shared_libraries"].append(app.object())
+            else:
+                self.object["apps"].append(app.object())
 
     def list_attributes(self, attributes):
         self.object["attributes"] = []

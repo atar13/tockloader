@@ -41,7 +41,7 @@ class TabApp:
     App object, and the correct one for the board will be used later.
     """
 
-    def __init__(self, tbfs):
+    def __init__(self, tbfs, fn_reloc, fn_pointers_start, fn_pointers_size):
         """
         Create a `TabApp` from a list of TabTbfs.
         """
@@ -51,6 +51,9 @@ class TabApp:
             )
 
         self.tbfs = tbfs  # A list of TabTbfs.
+        self.fn_reloc = fn_reloc
+        self.fn_pointers_start = fn_pointers_start
+        self.fn_pointers_size = fn_pointers_size
 
         # Address where RAM for apps starts on the board. This is useful for
         # filtering TBFs that are fixed address to remove TBFs which have

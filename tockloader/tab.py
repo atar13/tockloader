@@ -16,6 +16,8 @@ from .app_tab import TabTbf
 from .exceptions import TockLoaderException
 from .tbfh import TBFHeader
 from .tbfh import TBFFooter
+from .tbfh import TBFTLV
+from .tockloader import SHLIB_DEBUG
 
 
 class TAB:
@@ -85,7 +87,23 @@ class TAB:
             tabtbf = self._extract_tbf_from_filebuffer(tbf_filename, binary)
             tbfs.append(tabtbf)
 
-        return TabApp(tbfs)
+        fn_reloc = self._parse_fn_reloc(arch)
+        num_fn_relocs = len(fn_reloc)
+
+        # assume each pointer is 4 bytes
+        fn_pointers_size = num_fn_relocs * 4
+        fn_pointers_start = tbfs[0].tbfh.get_binary_end_offset()
+
+        tlv = tbfs[0].tbfh._get_tlv(TBFTLV.HEADER_TYPE_PROGRAM)
+        if tlv:
+            tlv.binary_end_offset = fn_pointers_start + fn_pointers_size
+        else:
+            tbfs[0].tbfh.fields["total_size"] = fn_pointers_start + fn_pointers_size
+
+        if SHLIB_DEBUG:
+            print(f"DEBUG: adding {fn_pointers_size} bytes function pointer space")
+
+        return TabApp(tbfs, self.fn_reloc, fn_pointers_start, fn_pointers_size)
 
     def extract_tbf(self, tbf_name):
         """
@@ -249,6 +267,8 @@ than its defined total_size ({} bytes)".format(
 
             # Get application binary code.
             app_binary = binary[start_of_app_binary:start_of_footers]
+            if SHLIB_DEBUG:
+                print(f"app_binary is from {start_of_app_binary:X} to {start_of_footers:X}")
 
             # Extract the footer if any should exist. It is OK if the footer
             # buffer is zero length, the footer object will just be empty.
@@ -278,6 +298,22 @@ than its defined total_size ({} bytes)".format(
         metadata_str = self.tab.extractfile(metadata_tarinfo).read().decode("utf-8")
         self.metadata = toml.loads(metadata_str)
         return self.metadata
+
+    def _parse_fn_reloc(self, arch):
+        # Use cached value.
+        if hasattr(self, "fn_reloc"):
+            return self.fn_reloc
+
+        # Otherwise parse f.toml file.
+        try: 
+            fn_reloc_tarinfo = self.tab.getmember(f"{arch}-reloc.toml")
+            fn_reloc_str = self.tab.extractfile(fn_reloc_tarinfo).read().decode("utf-8")
+            self.fn_reloc = toml.loads(fn_reloc_str)
+            return self.fn_reloc
+        except:
+            self.fn_reloc = None 
+            return None
+
 
     def _get_metadata_key(self, key):
         """

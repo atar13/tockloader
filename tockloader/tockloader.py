@@ -14,6 +14,7 @@ import logging
 import os
 import platform
 import re
+import struct
 import textwrap
 import time
 
@@ -35,6 +36,8 @@ from .stlink import STLink
 from .flash_file import FlashFile
 from .tickv import TockTicKV
 
+SHLIB_FUNCTION_POINTERS = True
+SHLIB_DEBUG = True
 
 class TockLoader:
     """
@@ -1635,6 +1638,141 @@ class TockLoader:
             # installed apps and makes sure the kernel will find the correct end
             # of applications.
             self.channel.clear_bytes(app_address)
+
+        # perform function relocation fixups
+        for app in apps: 
+            print(type(app))
+            if isinstance(app, TabApp):
+                self.relocate_functions(app)
+                pass
+            elif isinstance(app, InstalledApp):
+                pass
+
+    def relocate_functions(self, app):
+        if app.fn_reloc is None:
+            return
+        apps = self._extract_all_app_headers(extract_app_binary=True)
+        for installed_app in apps:
+            app_name = installed_app.tbfh.get_app_name()
+            fn_pointers = {}
+            num_fn_pointers_allocated = 0
+            # does this app have any fn relocations
+            for fn_name, reloc_info in app.fn_reloc.items():
+                if reloc_info["app_name"] == app_name:
+                    if SHLIB_DEBUG:
+                        print(f"{app_name} needs relocation for fn {fn_name}")
+                    # find a shlib with the symbol we need
+                    for maybe_shlib in apps:
+                        is_shared_lib = maybe_shlib.tbfh.is_shared_library() 
+                        shlib_name = maybe_shlib.tbfh.get_app_name()
+                        # print(shlib_name, reloc_info["lib_name"])
+                        if is_shared_lib and shlib_name == reloc_info["lib_name"]: 
+                            if SHLIB_DEBUG:
+                                print(f"Found shared library with fn {fn_name}")
+                            shlib_address = maybe_shlib.address 
+                            shlib_before_binary = maybe_shlib.tbfh.get_size_before_app()
+                            if SHLIB_DEBUG:
+                                print(f"Shlib is at {shlib_address}")
+                            app_binary = installed_app.just_get_binary(installed_app.get_address())
+                            app_fn_got_addr = reloc_info["app_got_addr"]
+                            if SHLIB_DEBUG:
+                                print(f"fn entry in app got is 0x{app_fn_got_addr:08X}")
+                            binary_size = len(app_binary) 
+                            pre_binary_size = installed_app.tbfh.get_size_before_app()
+                            if SHLIB_DEBUG:
+                                print(f"App binary is: 0x{binary_size:08X} bytes")
+                                print(f"TBFH is: 0x{pre_binary_size:08X} bytes")
+
+
+                            lib_func_offset = (reloc_info["lib_func_offset"] & 0x0FFFFFFF) + shlib_before_binary - 2
+
+                            func_offset = shlib_address + lib_func_offset
+                            func_offset_bytes = struct.pack("<I", func_offset)
+
+                            if SHLIB_DEBUG:
+                                print(f"ShLib offset: {shlib_address:08X}")
+                                print(f"Lib func offset: {func_offset:08X}")
+                                print(f"Lib func offset bytes: {func_offset_bytes}")
+                            app_binary_byte_array = bytearray(app_binary) 
+
+                            #TODO: i think this breaks with two functions
+
+                            # for i in range(app_fn_got_addr, app_fn_got_addr+4):
+                            #     print(f"fn entry in app got at {i:08X} is holding {app_binary_byte_array[i]}")
+
+                            # for i in range(0, len(app_binary_byte_array)-1, 4):
+                            #     if i+2 > len(app_binary_byte_array)-1:
+                            #         break
+                            #     print(f"0x{i:08X}: {app_binary_byte_array[i]:02X} {app_binary_byte_array[i+1]:02X} {app_binary_byte_array[i+2]:02X} {app_binary_byte_array[i+3]:02X}")
+
+                            if SHLIB_FUNCTION_POINTERS:
+                                # To clarify this function pointer refers to functions defined as: extern int (*lib_func)(int x);
+                                # If function pointers are enabled, we need to add "allocate" some space for the 
+                                # function pointer to point to. There, we can store the actual address to the 
+                                # function
+                                # 1. Application code tries to call a function
+                                # 
+                                print("SHLIB_FUNCTION_POINTERS is enabled")
+
+                                # Need to add some more space to the end of the main app binary
+                                # and update the binary_end_offset field of the Program TLV so
+                                # that footers can still be parsed properly.
+
+                                if fn_name not in fn_pointers:
+                                    fn_pointer_location = app.fn_pointers_start + (4 * num_fn_pointers_allocated)
+                                    if SHLIB_DEBUG:
+                                        print(f"Writing actual function address of function {fn_name} to {fn_pointer_location:08X}")
+                                    fn_pointers[fn_name] = fn_pointer_location
+
+                                    # write the actual address of the function to this extra space
+                                    for i in range(0, 4):
+                                        fn_pointer_location_per_byte = fn_pointer_location + i
+                                        if SHLIB_DEBUG:
+                                            print(f"patching byte 0x{fn_pointer_location_per_byte:08X} from 0x{app_binary_byte_array[fn_pointer_location_per_byte]:02X} to 0x{func_offset_bytes[i]:02X}")
+                                        app_binary_byte_array[fn_pointer_location_per_byte] = func_offset_bytes[i]
+
+                                    num_fn_pointers_allocated+=1
+                                    
+                                fn_pointer_location_bytes = struct.pack("<I", (fn_pointers[fn_name] - pre_binary_size) | 0x80000000)
+                                # update GOT entry to point to where the actual function addess lives.
+                                # can't just write function address in GOT, need a layer of indirection 
+                                fixed_app_fn_got_addr = app_fn_got_addr
+                                # TODO: change these to a memcpy
+                                for i in range(0, 4):
+                                    app_got_addr_byte = fixed_app_fn_got_addr + i
+                                    if SHLIB_DEBUG:
+                                        print("app_got_addr_byte", app_got_addr_byte);
+                                        print(f"patching byte 0x{app_got_addr_byte:08X} from 0x{app_binary_byte_array[app_got_addr_byte]:02X} to 0x{fn_pointer_location_bytes[i]:02X}")
+                                    app_binary_byte_array[app_got_addr_byte] = fn_pointer_location_bytes[i]
+                                app_binary = bytes(app_binary_byte_array)
+
+                            else: 
+                                # For functions defined as: int lib_func(int x);
+                                fixed_app_fn_got_addr = app_fn_got_addr
+                                for i in range(0, 4):
+                                    app_got_addr_byte = fixed_app_fn_got_addr + i
+                                    if SHLIB_DEBUG:
+                                        print("app_got_addr_byte", app_got_addr_byte);
+                                        print(f"patching byte 0x{app_got_addr_byte:08X} from 0x{app_binary_byte_array[app_got_addr_byte]:02X} to 0x{func_offset_bytes[i]:02X}")
+                                    app_binary_byte_array[app_got_addr_byte] = func_offset_bytes[i]
+                                app_binary = bytes(app_binary_byte_array)
+
+                            if SHLIB_DEBUG:
+                                print(f"relocated app to flash len {len(app_binary)}")
+
+                            self.channel.flash_binary(installed_app.address, app_binary)
+
+                            # uncomment to write relocated binary to file for inspection
+                            # with open("relocated_binary.bin", "wb") as file:
+                            #     file.write(app_binary)
+
+    def _get_package_start_addr(self, package_name):
+        """
+        Search the board's flash for the starting address
+        of a certain package
+        """
+        return 0
+
 
     def _replace_with_padding(self, app):
         """

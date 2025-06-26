@@ -28,6 +28,7 @@ class TBFTLV:
     HEADER_TYPE_KERNEL_VERSION = 0x08
     HEADER_TYPE_PROGRAM = 0x09
     HEADER_TYPE_SHORT_ID = 0x0A
+    HEADER_TYPE_SHARED_LIBRARY = 0x0B
 
     def get_tlvid(self):
         return self.TLVID
@@ -719,6 +720,45 @@ class TBFTLVShortId(TBFTLV):
             "short_id": self.short_id,
         }
 
+class TBFTLVSharedLibrary(TBFTLV):
+    TLVID = TBFTLV.HEADER_TYPE_SHARED_LIBRARY
+    NUMBER_PARAMETERS = 1
+    PARAMETER_HELP = "<is_shared_library>"
+
+    def __init__(self, buffer, parameters=[]):
+        self.valid = False
+
+        base = struct.unpack("<BBH", buffer[0:4])
+        self.is_shared_library = base[0]
+        self.valid = True
+
+        self.dep_names = buffer[4:].decode("utf-8").split('\0')
+
+
+    def pack(self):
+        encoded_dep_names = '\0'.join(self.dep_names).encode("utf-8")
+        out = struct.pack("<HHI", self.TLVID, 4 + len(encoded_dep_names), self.is_shared_library)
+        out += encoded_dep_names
+        # May need to add padding.
+        padding_length = roundup(len(encoded_dep_names), 4) - len(encoded_dep_names)
+        if padding_length > 0:
+            out += b"\0" * padding_length
+        return out
+
+    def __str__(self):
+        out = "TLV: ShortID ({})\n".format(self.TLVID)
+        out += "  {:<20}: {:>10} {:>#12x}\n".format(
+            "is_shared_library", self.is_shared_library, self.is_shared_library,
+        )
+        return out
+
+    def object(self):
+        return {
+            "type": "shared_library",
+            "id": self.TLVID,
+            "is_shared_library": self.is_shared_library,
+        }
+
 
 TLV_MAPPINGS = {
     "main": TBFTLVMain,
@@ -732,6 +772,7 @@ TLV_MAPPINGS = {
     "persistent_storage": TBFTLVPersistentACL,
     "kernel_version": TBFTLVKernelVersion,
     "short_id": TBFTLVShortId,
+    "shared_library": TBFTLVSharedLibrary,
 }
 
 
@@ -900,6 +941,10 @@ class TBFHeader:
                         elif tipe == TBFTLV.HEADER_TYPE_SHORT_ID:
                             if remaining >= 4 and length == 4:
                                 self.tlvs.append(TBFTLVShortId(buffer[0:4]))
+
+                        elif tipe == TBFTLV.HEADER_TYPE_SHARED_LIBRARY:
+                            if remaining >= length:
+                                self.tlvs.append(TBFTLVSharedLibrary(buffer[0:length]))
 
                         else:
                             logging.warning("Unknown TLV block in TBF header.")
@@ -1099,6 +1144,16 @@ class TBFHeader:
             return (tlv.kernel_major, tlv.kernel_minor)
         else:
             return None
+
+    def is_shared_library(self) -> bool:
+        """
+        Return true/false if this TBF is for a shared library or not
+        """
+        tlv = self._get_tlv(TBFTLV.HEADER_TYPE_SHARED_LIBRARY)
+        if tlv:
+            return (tlv.is_shared_library == 1)
+        else:
+            return False
 
     def has_footer(self):
         """

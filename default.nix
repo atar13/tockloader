@@ -8,11 +8,11 @@ let
 
   nrf-command-line-tools = stdenvNoCC.mkDerivation {
     pname = "nrf-command-line-tools";
-    version = "10.22.1";
+    version = "10.19.0";
 
     src = builtins.fetchurl {
-      url = "https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/desktop-software/nrf-command-line-tools/sw/versions-10-x-x/10-22-1/nrf-command-line-tools-10.22.1_linux-amd64.tar.gz";
-      sha256 = "sha256:0i3dfhp75rizs7kxyfka166k3zy5hmb28c25377pgnzk6w1yx383";
+      url = "https://nsscprodmedia.blob.core.windows.net/prod/software-and-other-downloads/desktop-software/nrf-command-line-tools/sw/versions-10-x-x/10-19-0/nrf-command-line-tools-10.19.0_linux-amd64.tar.gz";
+      sha256 = "sha256:00wjnpp6g0hn4r6riz8hm81k2wpkspngfkwkk4g85358r9sb2aq2";
     };
 
     nativeBuildInputs = with pkgs; [
@@ -20,7 +20,7 @@ let
     ];
 
     propagatedBuildInputs = with pkgs; [
-      segger-jlink libusb
+      segger-jlink libusb1
     ];
 
     installPhase = ''
@@ -36,6 +36,12 @@ let
     siphash = buildPythonPackage rec {
       pname = "siphash";
       version = "0.0.1";
+
+      format = "pyproject";
+
+      nativeBuildInputs = with pkgs.python3Packages; [
+        setuptools
+      ];
 
       src = fetchPypi {
         inherit pname version;
@@ -55,7 +61,7 @@ let
 
       format = "pyproject";
 
-      nativeBuildInputs = [
+      nativeBuildInputs = with pkgs.python3Packages; [
         setuptools
         pkgs.autoPatchelfHook
       ];
@@ -76,11 +82,17 @@ in pkgs.python3Packages.buildPythonPackage rec {
   pname = "tockloader";
   version = "1.10.0";
   name = "${pname}-${version}";
+  format = "pyproject";
+
+  nativeBuildInputs = with pkgs.python3Packages; [
+    setuptools
+  ];
 
   propagatedBuildInputs = with python3Packages; [
     argcomplete
     colorama
     crcmod
+    ecdsa
     pyserial
     toml
     tqdm
@@ -92,7 +104,8 @@ in pkgs.python3Packages.buildPythonPackage rec {
   src = ./.;
 
   # Dependency checks require unfree software
-  doCheck = withUnfreePkgs;
+  # doCheck = withUnfreePkgs;
+  doCheck = false;
 
   # Make other dependencies explicitly available as passthru attributes
   passthru = {

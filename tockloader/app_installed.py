@@ -40,9 +40,12 @@ class InstalledApp:
 
     def is_app(self):
         """
-        Whether this is an app or padding.
+        Whether this is an app or padding/shared library.
         """
-        return True
+        return not self.tbfh.is_shared_library()
+
+    def is_shared_library(self):
+        return self.tbfh.is_shared_library()
 
     def is_modified(self):
         """
@@ -286,6 +289,40 @@ class InstalledApp:
         else:
             # Only the header needs to be flashed
             return self.tbfh.get_binary()
+
+    def just_get_binary(self, address):
+        """
+        """
+        # Set the starting address for this app. This is only relevant with
+        # fixed addresses, and is a no-op for apps which are not compiled for
+        # fixed addresses.
+        self.tbfh.adjust_starting_address(address)
+
+        # Get the actual full app binary.
+        binary = self.tbfh.get_binary() + self.app_binary
+
+        # Check that the binary is not longer than it is supposed to be.
+        # This might happen if the size was changed, but any code using this
+        # binary has no way to check. If the binary is too long, we truncate
+        # the actual binary blob (which should just be padding) to the
+        # correct length. If it is too short it is ok, since the board
+        # shouldn't care what is in the flash memory the app is not using.
+        size = self.get_size()
+        if len(binary) > size:
+            logging.info(
+                "Binary is larger than what it says in the header. Actual:{}, expected:{}".format(
+                    len(binary), size
+                )
+            )
+            logging.info("Truncating binary to match.")
+
+            # Check on what we would be removing. If it is all zeros, we
+            # determine that it is OK to truncate.
+            to_remove = binary[size:]
+            if len(to_remove) != to_remove.count(0):
+                raise TockLoaderException("Error truncating binary. Not zero.")
+
+        return binary
 
     def info(self, verbose=False):
         """
